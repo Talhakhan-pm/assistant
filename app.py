@@ -1,22 +1,29 @@
 import os
 import re
 import requests
+import time
+import concurrent.futures
+from functools import lru_cache
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 from openai import OpenAI
 from vehicle_validation import has_vehicle_info, get_missing_info_message
-static_folder = os.path.abspath('static')
-app = Flask(__name__, static_folder=static_folder, static_url_path='/static')
 
 load_dotenv()
+
+static_folder = os.path.abspath('static')
+app = Flask(__name__, static_folder=static_folder, static_url_path='/static')
+app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(24).hex())
 
 api_key = os.getenv("OPENAI_API_KEY")
 serpapi_key = os.getenv("SERPAPI_KEY")
 client = OpenAI(api_key=api_key)
 
-app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "auto-parts-assistant-key")
-print("🧪 SERPAPI_KEY loaded:", serpapi_key)
+# Validate required API keys
+if not api_key:
+    raise ValueError("OPENAI_API_KEY is not set in environment variables")
+if not serpapi_key:
+    raise ValueError("SERPAPI_KEY is not set in environment variables")
 
 # 🔧 Smart query cleaner for better search match
 def clean_query(text):
@@ -38,65 +45,91 @@ def clean_query(text):
 
     return text
 
-# VIN decoder helper function
+# VIN decoder helper function with caching (VINs don't change, so cache indefinitely)
+@lru_cache(maxsize=500)
 def decode_vin(vin):
+    """Decode VIN with caching for better performance"""
     if not vin:
         return {}
     try:
         url = f'https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/{vin}?format=json'
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        
         data = response.json()
-        if data and data['Results']:
+        if data and data.get('Results') and len(data['Results']) > 0:
             result = data['Results'][0]
             if result.get('Make') and result.get('ModelYear'):
                 return result
+            else:
+                print(f"Invalid VIN data received: Missing Make or ModelYear for VIN {vin}")
+        else:
+            print(f"No results found for VIN {vin}")
+    except requests.exceptions.RequestException as e:
+        print(f"VIN decode request error: {e}")
+    except ValueError as e:
+        print(f"VIN decode JSON parsing error: {e}")
     except Exception as e:
-        print(f"VIN decode error: {e}")
+        print(f"VIN decode unexpected error: {e}")
     return {}
 
-def get_ebay_serpapi_results(query):
-    print("🔥 SerpAPI called with:", query)
-
-    # First, get new items
-    new_params = {
+# Cache results for 5 minutes (300 seconds)
+@lru_cache(maxsize=100)
+def get_serpapi_cached(query_type, query, timestamp):
+    """Cache wrapper for SerpAPI requests. Timestamp is used to invalidate cache after 5 minutes."""
+    params = {
         "engine": "ebay",
         "ebay_domain": "ebay.com",
         "_nkw": query,
-        "LH_ItemCondition": "1000",  # New items
-        "LH_BIN": "1",               # Buy It Now only
-        "api_key": serpapi_key
-    }
-    
-    # Then, get used items
-    used_params = {
-        "engine": "ebay",
-        "ebay_domain": "ebay.com",
-        "_nkw": query,
-        "LH_ItemCondition": "3000",  # Used items
-        "LH_BIN": "1",               # Buy It Now only
+        "LH_ItemCondition": "1000" if query_type == "new" else "3000",
+        "LH_BIN": "1",  # Buy It Now only
         "api_key": serpapi_key
     }
     
     try:
-        # Get new items
-        new_response = requests.get("https://serpapi.com/search", params=new_params)
-        new_results = new_response.json()
+        response = requests.get("https://serpapi.com/search", params=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching {query_type} items from SerpAPI: {e}")
+        return {"organic_results": []}
+
+def fetch_ebay_results(query_type, query, timestamp):
+    """Function to fetch eBay results for concurrent execution"""
+    results = get_serpapi_cached(query_type, query, timestamp)
+    return process_ebay_results(results, query, max_items=3)
+
+def get_ebay_serpapi_results(query):
+    """Fetch eBay results using concurrent requests"""
+    # Use timestamp for cache invalidation every 5 minutes
+    cache_timestamp = int(time.time() / 300)
+    
+    # Define tasks for concurrent execution
+    tasks = [
+        ("new", query, cache_timestamp),
+        ("used", query, cache_timestamp)
+    ]
+    
+    all_items = []
+    
+    # Use ThreadPoolExecutor for concurrent requests
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        # Create a mapping of futures to their tasks
+        future_to_task = {
+            executor.submit(fetch_ebay_results, *task): task[0]
+            for task in tasks
+        }
         
-        # Get used items
-        used_response = requests.get("https://serpapi.com/search", params=used_params)
-        used_results = used_response.json()
-        
-        # Process both sets of results
-        new_items = process_ebay_results(new_results, query, max_items=3)
-        used_items = process_ebay_results(used_results, query, max_items=3)
-        
-        # Combine the results
-        all_items = new_items + used_items
-        return all_items
-        
-    except Exception as e:
-        print("SerpAPI error:", e)
-        return []
+        # Process results as they complete
+        for future in concurrent.futures.as_completed(future_to_task):
+            task_type = future_to_task[future]
+            try:
+                items = future.result()
+                all_items.extend(items)
+            except Exception as e:
+                print(f"Error processing {task_type} items: {e}")
+    
+    return all_items
 
 def process_ebay_results(results, query, max_items=3):
     """Helper function to process eBay results"""
@@ -143,10 +176,24 @@ def index():
         return render_template("index.html")
     return render_template("index.html")
 
+# Sanitize user input
+def sanitize_input(text):
+    if not text:
+        return ""
+    # Remove any potentially harmful characters
+    sanitized = re.sub(r'[^\w\s\-.,?!@#$%^&*()_+=[\]{}|:;<>"/]', '', text)
+    return sanitized.strip()
+
 # AJAX endpoint for GPT Assistant
 @app.route("/api/search", methods=["POST"])
 def search_api():
-    query = request.form.get("prompt", "").strip()
+    query = sanitize_input(request.form.get("prompt", ""))
+    
+    if not query:
+        return jsonify({
+            "success": False,
+            "validation_error": "Please enter a valid search query."
+        })
     
     # Check if query has sufficient vehicle information
     if not has_vehicle_info(query):
@@ -202,7 +249,6 @@ Your job is to:
         # Use GPT-generated search term if available, else fallback to cleaned query
         search_lines = [line for line in questions.split("\n") if "🔎" in line]
         search_term = clean_query(search_lines[0].replace("🔎", "").strip()) if search_lines else clean_query(query)
-        print("🧼 Final search term used:", search_term)
 
         listings = get_ebay_serpapi_results(search_term)
 
@@ -215,16 +261,20 @@ Your job is to:
         print(f"API error: {e}")
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An error occurred while processing your request. Please try again later."
         })
 
 # AJAX endpoint for VIN decoding
 @app.route("/api/vin-decode", methods=["POST"])
 def vin_decode_api():
-    vin = request.form.get("vin", "").strip()
+    vin = sanitize_input(request.form.get("vin", ""))
     
     if not vin:
         return jsonify({"error": "No VIN provided"})
+    
+    # Validate VIN format (17 alphanumeric characters for modern vehicles)
+    if not re.match(r'^[A-HJ-NPR-Z0-9]{17}$', vin):
+        return jsonify({"error": "Invalid VIN format. VIN should be 17 alphanumeric characters (excluding I, O, and Q)."})
     
     try:
         vin_info = decode_vin(vin)
@@ -235,8 +285,9 @@ def vin_decode_api():
         # Return the VIN information as JSON
         return jsonify(vin_info)
     except Exception as e:
+        # Log the error but don't expose details to the client
         print(f"VIN decode error: {e}")
-        return jsonify({"error": f"An error occurred: {str(e)}"})
+        return jsonify({"error": "An error occurred while decoding the VIN. Please try again later."})
 
 # For backward compatibility - redirect old routes to the API endpoints
 @app.route("/vin-decode", methods=["POST"])

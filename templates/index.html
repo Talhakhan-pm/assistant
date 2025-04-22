@@ -44,6 +44,41 @@
       margin-top: 1rem;
     }
     
+    /* Loading and progress indicators */
+    .progress-container {
+      margin: 20px 0;
+      display: none;
+    }
+    .progress {
+      height: 10px;
+      border-radius: 10px;
+    }
+    .progress-bar {
+      border-radius: 10px;
+      animation: progress-animation 1.5s infinite;
+    }
+    @keyframes progress-animation {
+      0% { width: 10%; }
+      50% { width: 65%; }
+      100% { width: 95%; }
+    }
+    
+    /* Mobile optimization */
+    @media (max-width: 576px) {
+      .card {
+        padding: 1rem !important;
+      }
+      .list-group-item {
+        padding: 0.75rem 0.5rem;
+        flex-direction: column !important;
+        align-items: flex-start !important;
+      }
+      .shipping-tag {
+        margin-left: 0 !important;
+        margin-top: 5px;
+      }
+    }
+    
     /* Enhanced autocomplete styles */
     .search-container {
       position: relative;
@@ -154,6 +189,14 @@
           <!-- Container for validation errors -->
           <div id="validation-error-container"></div>
           
+          <!-- Progress indicator -->
+          <div id="search-progress" class="progress-container">
+            <p class="text-muted mb-2">Searching for parts information...</p>
+            <div class="progress">
+              <div class="progress-bar progress-bar-striped progress-bar-animated bg-danger" role="progressbar" aria-valuenow="75" aria-valuemin="0" aria-valuemax="100"></div>
+            </div>
+          </div>
+          
           <!-- Container for AI results -->
           <div id="results-container"></div>
         </div>
@@ -172,6 +215,14 @@
               <button type="submit" id="vin-button" class="btn btn-secondary">Decode VIN</button>
             </div>
           </form>
+
+          <!-- VIN Progress indicator -->
+          <div id="vin-progress" class="progress-container">
+            <p class="text-muted mb-2">Decoding VIN...</p>
+            <div class="progress">
+              <div class="progress-bar progress-bar-striped progress-bar-animated bg-secondary" role="progressbar" aria-valuenow="75" aria-valuemin="0" aria-valuemax="100"></div>
+            </div>
+          </div>
 
           <!-- Container for VIN results -->
           <div id="vin-result-container"></div>
