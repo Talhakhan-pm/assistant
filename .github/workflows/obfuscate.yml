@@ -1,11 +1,7 @@
 name: Obfuscate JavaScript
 
 on:
-  push:
-    branches: [ master ]
-    paths:
-      - 'static/autoxpress.readable.js'
-  # Allow manual triggers too
+  # Only manual triggers
   workflow_dispatch:
 
 permissions:
