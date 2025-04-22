@@ -4,7 +4,7 @@ on:
   push:
     branches: [ master ]
     paths:
-      - 'static/autoxpress.js'
+      - 'static/autoxpress.readable.js'
   # Allow manual triggers too
   workflow_dispatch:
 
@@ -35,15 +35,15 @@ jobs:
         
       - name: Obfuscate JavaScript
         run: |
-          if [ -f "static/autoxpress.js" ]; then
-            echo "Found JavaScript file, proceeding with obfuscation"
+          if [ -f "static/autoxpress.readable.js" ]; then
+            echo "Found JavaScript source file, proceeding with obfuscation"
             node -e "
               const fs = require('fs');
               const JavaScriptObfuscator = require('javascript-obfuscator');
               
-              // Read the JavaScript file
-              const jsPath = './static/autoxpress.js';
-              const jsContent = fs.readFileSync(jsPath, 'utf8');
+              // Read the readable JavaScript file
+              const readablePath = './static/autoxpress.readable.js';
+              const jsContent = fs.readFileSync(readablePath, 'utf8');
               console.log('Original file size:', jsContent.length, 'bytes');
               
               // Copyright notice
@@ -61,12 +61,13 @@ jobs:
               
               console.log('Obfuscated file size:', obfuscatedCode.length, 'bytes');
               
-              // Write back to file
+              // Write obfuscated code to the main JS file
+              const jsPath = './static/autoxpress.js';
               fs.writeFileSync(jsPath, copyright + obfuscatedCode);
               console.log('Successfully wrote obfuscated code to', jsPath);
             "
           else
-            echo "❌ JavaScript file not found at static/autoxpress.js"
+            echo "❌ JavaScript source file not found at static/autoxpress.readable.js"
             exit 1
           fi
       
