@@ -445,6 +445,8 @@
       
       // AJAX for Search form
       if (searchForm && searchButton && resultsContainer) {
+        const searchProgress = document.getElementById('search-progress');
+        
         searchForm.addEventListener('submit', function(e) {
           e.preventDefault();
           
@@ -453,6 +455,11 @@
           const query = formData.get('prompt').trim();
           
           if (!query) {
+            validationErrorContainer.innerHTML = `
+              <div class="error-box mt-3 fade-in">
+                <p class="mb-0"><strong>⚠️ Error:</strong> Please enter a search query</p>
+              </div>
+            `;
             return;
           }
           
@@ -465,17 +472,47 @@
           validationErrorContainer.innerHTML = '';
           resultsContainer.innerHTML = '';
           
+          // Show progress indicator
+          if (searchProgress) {
+            searchProgress.style.display = 'block';
+          }
+          
+          // Set a timeout to handle slow requests
+          const timeoutId = setTimeout(() => {
+            if (searchProgress) {
+              const progressText = searchProgress.querySelector('p');
+              if (progressText) {
+                progressText.textContent = 'This is taking longer than expected. Still searching...';
+              }
+            }
+          }, 10000); // 10 seconds
+          
           // Submit the form via AJAX
           fetch('/api/search', {
             method: 'POST',
-            body: formData
+            body: formData,
+            // Add a timeout of 60 seconds
+            signal: AbortSignal.timeout(60000)
           })
-          .then(response => response.json())
+          .then(response => {
+            if (!response.ok) {
+              throw new Error(`Server responded with status: ${response.status}`);
+            }
+            return response.json();
+          })
           .then(data => {
+            // Clear timeout
+            clearTimeout(timeoutId);
+            
             // Reset button state
             searchButton.disabled = false;
             searchButton.innerHTML = '🔍 Search';
             searchButton.classList.remove('opacity-75');
+            
+            // Hide progress indicator
+            if (searchProgress) {
+              searchProgress.style.display = 'none';
+            }
             
             // Handle validation errors
             if (!data.success && data.validation_error) {
@@ -492,6 +529,7 @@
               validationErrorContainer.innerHTML = `
                 <div class="error-box mt-3 fade-in">
                   <p class="mb-0"><strong>⚠️ Error:</strong> ${data.error || 'An unknown error occurred'}</p>
+                  <p class="mb-0 mt-2"><small>Please try again or refine your search.</small></p>
                 </div>
               `;
               return;
@@ -631,6 +669,8 @@
       
       // AJAX for VIN form
       if (vinForm && vinButton && vinResultContainer) {
+        const vinProgress = document.getElementById('vin-progress');
+        
         vinForm.addEventListener('submit', function(e) {
           e.preventDefault();
           
@@ -638,7 +678,21 @@
           const vin = vinInput.value.trim();
           
           if (!vin) {
-            alert("Please enter a VIN");
+            vinResultContainer.innerHTML = `
+              <div class="alert alert-danger mt-3 fade-in">
+                <strong>Error:</strong> Please enter a VIN
+              </div>
+            `;
+            return;
+          }
+          
+          // Validate VIN format (17 characters, no I, O, Q)
+          if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(vin)) {
+            vinResultContainer.innerHTML = `
+              <div class="alert alert-danger mt-3 fade-in">
+                <strong>Error:</strong> Invalid VIN format. VIN should be 17 alphanumeric characters (excluding I, O, and Q).
+              </div>
+            `;
             return;
           }
           
@@ -647,16 +701,45 @@
           vinButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span> Decoding...';
           vinButton.classList.add("opacity-75");
           
+          // Clear previous results and show progress
+          vinResultContainer.innerHTML = '';
+          if (vinProgress) {
+            vinProgress.style.display = 'block';
+          }
+          
+          // Set a timeout to handle slow requests
+          const timeoutId = setTimeout(() => {
+            if (vinProgress) {
+              const progressText = vinProgress.querySelector('p');
+              if (progressText) {
+                progressText.textContent = 'This is taking longer than expected. Still decoding...';
+              }
+            }
+          }, 5000); // 5 seconds
+          
           // Make an AJAX request to decode the VIN
           fetch('/api/vin-decode', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/x-www-form-urlencoded',
             },
-            body: `vin=${encodeURIComponent(vin)}`
+            body: `vin=${encodeURIComponent(vin)}`,
+            // Add a timeout of 20 seconds
+            signal: AbortSignal.timeout(20000)
           })
-          .then(response => response.json())
+          .then(response => {
+            if (!response.ok) {
+              throw new Error(`Server responded with status: ${response.status}`);
+            }
+            return response.json();
+          })
           .then(data => {
+            // Clear timeout and hide progress
+            clearTimeout(timeoutId);
+            if (vinProgress) {
+              vinProgress.style.display = 'none';
+            }
+            
             // Reset button state
             vinButton.disabled = false;
             vinButton.innerHTML = 'Decode VIN';
@@ -704,6 +787,12 @@
             }
           })
           .catch(error => {
+            // Clear timeout and hide progress
+            clearTimeout(timeoutId);
+            if (vinProgress) {
+              vinProgress.style.display = 'none';
+            }
+            
             console.error('Error:', error);
             vinButton.disabled = false;
             vinButton.innerHTML = 'Decode VIN';
@@ -711,7 +800,7 @@
             
             vinResultContainer.innerHTML = `
               <div class="alert alert-danger mt-3 fade-in">
-                <strong>Error:</strong> Failed to decode VIN. Please try again.
+                <strong>Error:</strong> ${error.message || 'Failed to decode VIN. Please try again.'}
               </div>
             `;
           });
