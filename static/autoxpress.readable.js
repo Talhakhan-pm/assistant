@@ -1,4 +1,4 @@
-    // Vehicle makes and models data
+    // Vehicle makes and models data - updated inventory
     const vehicleData = {
       "Acura": ["ILX", "MDX", "RDX", "TLX", "NSX", "RLX", "TSX"],
       "Audi": ["A3", "A4", "A5", "A6", "A7", "A8", "Q3", "Q5", "Q7", "Q8", "e-tron", "TT", "R8"],
