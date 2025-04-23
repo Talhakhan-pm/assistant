@@ -27,22 +27,123 @@ if not serpapi_key:
 
 # 🔧 Smart query cleaner for better search match
 def clean_query(text):
-    # Normalize dashes
+    """Enhanced query cleaner for better search match with common automotive parts"""
+    original_text = text
+    
+    # Normalize dashes and remove filler words
     text = re.sub(r"[–—]", "-", text)
-
-    # Remove weak filler words
     text = re.sub(r"\bfor\b", "", text, flags=re.IGNORECASE)
-
-    # Replace vague phrases with stronger keywords
-    text = text.lower()
-    text = text.replace("oem timing kit", "timing belt kit with water pump")
-    text = text.replace("timing kit", "timing belt kit with water pump")
-    text = text.replace("assembly", "complete assembly")
-    text = text.replace("radiator assembly", "radiator with fan and shroud")
-
+    
+    # Extract the year, make, and model for later reconstruction
+    year_pattern = r'\b(19|20)\d{2}\b'
+    year_match = re.search(year_pattern, text)
+    year = year_match.group(0) if year_match else ""
+    
+    # Convert to lowercase for processing
+    text_lower = text.lower()
+    
+    # Expanded part terms dictionary based on your real product data
+    part_terms = {
+        # Engine components
+        "engine wire harness": "engine wiring harness oem",
+        "engine wiring harness": "engine wiring harness oem",
+        "wire harness": "wiring harness oem",
+        "wiring harness": "wiring harness oem",
+        "engine mount": "engine motor mount",
+        "timing chain kit": "timing chain set complete",
+        "timing belt kit": "timing belt kit with water pump",
+        "water pump": "water pump with gasket",
+        "fuel pump": "fuel pump assembly oem",
+        "high pressure fuel pump": "high pressure fuel pump oem",
+        "fuel injector": "fuel injectors set",
+        "oil pan": "oil pan with gasket set",
+        "thermostat": "thermostat with housing",
+        "engine splash shield": "engine splash shield underbody cover",
+        
+        # Transmission components
+        "transmission kit": "transmission rebuild kit complete",
+        "transmission oil pipe": "transmission oil cooler lines",
+        "transmission hose": "transmission cooler line hose",
+        "clutch kit": "clutch kit with flywheel",
+        
+        # Exterior body parts
+        "front bumper": "front bumper cover complete assembly",
+        "rear bumper": "rear bumper cover complete assembly",
+        "bumper assembly": "bumper complete assembly with brackets",
+        "chrome bumper": "chrome front bumper complete",
+        "fender liner": "fender liner splash shield",
+        "headlight": "headlight assembly complete",
+        "headlight assembly": "headlight assembly complete oem style",
+        "taillight": "tail light assembly complete",
+        "grille": "front grille complete assembly",
+        "hood": "hood panel assembly",
+        "door panel": "door panel complete",
+        "mirror": "side mirror assembly",
+        "side mirror": "side mirror power assembly complete",
+        
+        # Brake system
+        "brake caliper": "brake caliper with bracket",
+        "brake rotor": "brake rotor disc",
+        "brake pad": "brake pads set",
+        "master cylinder": "brake master cylinder",
+        
+        # Suspension & Steering
+        "control arm": "control arm with ball joint",
+        "trailing arm": "trailing arm suspension kit",
+        "shock": "shock absorber strut assembly",
+        "strut assembly": "strut assembly complete",
+        "wheel bearing": "wheel bearing and hub assembly",
+        "hub assembly": "wheel hub bearing assembly",
+        "power steering": "power steering pump",
+        "steering column": "steering column assembly",
+        
+        # Electrical components
+        "alternator": "alternator oem replacement",
+        "starter": "starter motor oem",
+        "window switch": "power window master switch",
+        "master window switch": "power window master control switch",
+        
+        # HVAC
+        "radiator": "radiator complete with fans",
+        "radiator assembly": "radiator with fan shroud assembly",
+        "ac condenser": "ac condenser with receiver drier",
+        "blower motor": "hvac blower motor with fan",
+        
+        # Wheels
+        "rim": "wheel rim replacement",
+        "rims": "wheel rims set",
+        "hub cap": "hub caps set",
+    }
+    
+    # Check for exact part mentions first
+    for part, replacement in part_terms.items():
+        # Use word boundaries to match complete terms
+        pattern = r'\b' + re.escape(part) + r'\b'
+        if re.search(pattern, text_lower):
+            # Preserve original capitalization if possible
+            text = re.sub(pattern, replacement, text_lower, flags=re.IGNORECASE)
+            
+            # Make sure year and make/model stay with the part
+            if year:
+                # Remove year and add it to the beginning
+                text = re.sub(year_pattern, "", text)
+                text = year + " " + text
+                
+            # Clean up extra spaces
+            text = re.sub(r"\s+", " ", text).strip()
+            return text
+    
+    # If we didn't find a specific part pattern match, try to improve the general query
+    if "oem" not in text_lower and "aftermarket" not in text_lower:
+        # Add OEM for better quality results if it's not an aftermarket search
+        if any(word in text_lower for word in ["genuine", "original", "factory"]):
+            text += " OEM genuine"
+        elif "assembly" in text_lower or "complete" in text_lower:
+            text += " complete assembly"
+    
     # Trim and clean spaces
     text = re.sub(r"\s+", " ", text).strip()
-
+    
     return text
 
 # VIN decoder helper function with caching (VINs don't change, so cache indefinitely)
@@ -248,9 +349,34 @@ Your job is to:
 
         # Use GPT-generated search term if available, else fallback to cleaned query
         search_lines = [line for line in questions.split("\n") if "🔎" in line]
-        search_term = clean_query(search_lines[0].replace("🔎", "").strip()) if search_lines else clean_query(query)
 
+        if search_lines:
+            # Extract the search term without the emoji
+            search_term_raw = search_lines[0].replace("🔎", "").strip()
+            
+            # Clean and optimize the search term
+            search_term = clean_query(search_term_raw)
+            
+            # If there's a second search term, use it as a fallback
+            fallback_term = None
+            if len(search_lines) > 1:
+                fallback_term = clean_query(search_lines[1].replace("🔎", "").strip())
+        else:
+            # Fallback to user's query if no GPT search term
+            search_term = clean_query(query)
+            fallback_term = None
+
+        # Fetch primary search results
         listings = get_ebay_serpapi_results(search_term)
+
+        # If we didn't get good results with the first term and have a fallback, try it
+        if len(listings) < 2 and fallback_term:
+            fallback_listings = get_ebay_serpapi_results(fallback_term)
+            # Add any new listings not already present
+            existing_titles = [item.get('title', '').lower() for item in listings]
+            for item in fallback_listings:
+                if item.get('title', '').lower() not in existing_titles:
+                    listings.append(item)
 
         return jsonify({
             "success": True,
@@ -263,7 +389,6 @@ Your job is to:
             "success": False,
             "error": "An error occurred while processing your request. Please try again later."
         })
-
 # AJAX endpoint for VIN decoding
 @app.route("/api/vin-decode", methods=["POST"])
 def vin_decode_api():
